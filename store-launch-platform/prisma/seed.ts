@@ -5,7 +5,7 @@ import bcrypt from 'bcryptjs'
 const prisma = new PrismaClient()
 
 async function main() {
-  console.log('Seeding database...')
+  console.log('Seeding database with A-to-Z template...')
 
   // 1. Users
   const passwordHash = await bcrypt.hash('password123', 10)
@@ -31,329 +31,210 @@ async function main() {
     })
   }
 
-  // 2. FX Rates
-  const fxRates = [
-    { from: 'MXN', to: 'CAD', rate: 0.080 },
-    { from: 'COP', to: 'CAD', rate: 0.00035 },
-    { from: 'USD', to: 'CAD', rate: 1.35 },
+  // 2. Ingredients & Pricing (Simplified for this milestone, mostly to keep app working)
+  const ingredients = [
+     { name: 'Ground Beef', unit_type: 'g', category: 'Meat' },
+     { name: 'Bun', unit_type: 'unit', category: 'Bakery' }
   ]
 
-  await prisma.fXRate.deleteMany({})
-  for (const r of fxRates) {
-    await prisma.fXRate.create({
-      data: { from_currency: r.from, to_currency: r.to, rate: r.rate, date: new Date() }
-    })
-  }
-
-  // 3. Template
-  let template = await prisma.template.findFirst({ where: { name: 'Standard Store Opening' } })
-  if (!template) {
-    template = await prisma.template.create({
-      data: {
-        name: 'Standard Store Opening',
-        version: '1.0',
-        phases: {
-          create: [
-            {
-              name: '0. Intake',
-              order: 0,
-              tasks: {
-                create: [
-                  { name: 'Approve Budget', duration_days: 5, role_responsible: 'ADMIN' },
-                  { name: 'Sign Letter of Intent', duration_days: 7, role_responsible: 'PM' },
-                ]
-              }
-            },
-            {
-              name: '1. Site & Lease',
-              order: 1,
-              tasks: {
-                create: [
-                  { name: 'Site Survey', duration_days: 7, role_responsible: 'PM' },
-                  { name: 'Lease Negotiation', duration_days: 21, role_responsible: 'ADMIN' },
-                  { name: 'Sign Lease', duration_days: 3, role_responsible: 'ADMIN' },
-                ]
-              }
-            },
-            {
-              name: '2. Design & Permits',
-              order: 2,
-              tasks: {
-                create: [
-                  { name: 'Layout Design', duration_days: 14, role_responsible: 'PM' },
-                  { name: 'Submit for Permits', duration_days: 30, role_responsible: 'PM' },
-                ]
-              }
-            },
-            {
-              name: '3. Construction',
-              order: 3,
-              tasks: {
-                create: [
-                  { name: 'General Contractor Tender', duration_days: 14, role_responsible: 'PM' },
-                  { name: 'Construction Works', duration_days: 45, role_responsible: 'PM' },
-                ]
-              }
-            },
-             {
-              name: '4. Equip & IT',
-              order: 4,
-              tasks: {
-                create: [
-                   { name: 'Order POS', duration_days: 14, role_responsible: 'IT' },
-                   { name: 'Install Network', duration_days: 5, role_responsible: 'IT' },
-                ]
-              }
-            },
-             {
-              name: '5. Supply Chain',
-              order: 5,
-              tasks: {
-                create: [
-                   { name: 'Vendor Setup', duration_days: 10, role_responsible: 'PM' },
-                   { name: 'Initial Order', duration_days: 7, role_responsible: 'PM' },
-                ]
-              }
-            },
-             {
-              name: '6. Hiring & Training',
-              order: 6,
-              tasks: {
-                create: [
-                   { name: 'Hire Store Manager', duration_days: 21, role_responsible: 'PM' },
-                   { name: 'Staff Training', duration_days: 14, role_responsible: 'PM' },
-                ]
-              }
-            },
-             {
-              name: '7. Opening',
-              order: 7,
-              tasks: {
-                create: [
-                   { name: 'Soft Open', duration_days: 3, role_responsible: 'PM' },
-                   { name: 'Grand Open', duration_days: 1, role_responsible: 'PM' },
-                ]
-              }
-            }
-          ]
-        }
-      }
-    })
-  }
-
-  // 4. Stores
-  const storesData = [
-    { name: 'Mexico City Flagship', country: 'MX', city: 'Mexico City', timezone: 'America/Mexico_City', open_date: new Date('2025-06-01') },
-    { name: 'Bogota Centro', country: 'CO', city: 'Bogota', timezone: 'America/Bogota', open_date: new Date('2025-07-15') },
-    { name: 'Cancun Resort Kiosk', country: 'MX', city: 'Cancun', timezone: 'America/Cancun', open_date: new Date('2025-08-01') },
-  ]
-
-  for (const s of storesData) {
-    const existingStore = await prisma.store.findFirst({ where: { name: s.name } })
-    if (!existingStore) {
-      const store = await prisma.store.create({
-        data: {
-          name: s.name,
-          country: s.country,
-          city: s.city,
-          timezone: s.timezone,
-          planned_open_date: s.open_date,
-          status: 'PLANNING',
-          template_version: template.version,
-        }
-      })
-
-      // Generate Tasks
-      const phases = await prisma.templatePhase.findMany({
-        where: { template_id: template.id },
-        include: { tasks: true }
-      })
-
-      const projectStart = new Date(s.open_date)
-      projectStart.setDate(projectStart.getDate() - 120)
-
-      let currentOffset = 0
-
-      for (const phase of phases) {
-        for (const tTask of phase.tasks) {
-          const startDate = new Date(projectStart)
-          startDate.setDate(startDate.getDate() + currentOffset)
-
-          const dueDate = new Date(startDate)
-          dueDate.setDate(dueDate.getDate() + tTask.duration_days)
-
-          await prisma.task.create({
-            data: {
-              store_id: store.id,
-              title: tTask.name,
-              phase: phase.name,
-              status: 'NOT_STARTED',
-              start_date: startDate,
-              due_date: dueDate,
-            }
-          })
-
-          currentOffset += tTask.duration_days
-        }
-      }
-    }
-  }
-
-  // 5. Ingredients
-  const ingredientsData = [
-    { name: 'Wheat Flour', unit: 'g', category: 'Dry Goods' },
-    { name: 'Ground Beef', unit: 'g', category: 'Meat' },
-    { name: 'Cheddar Cheese', unit: 'g', category: 'Dairy' },
-    { name: 'Tomato', unit: 'g', category: 'Produce' },
-    { name: 'Lettuce', unit: 'g', category: 'Produce' },
-    { name: 'Burger Bun', unit: 'unit', category: 'Bakery' },
-    { name: 'Ketchup', unit: 'ml', category: 'Condiments' },
-    { name: 'Mayo', unit: 'ml', category: 'Condiments' },
-    { name: 'Salt', unit: 'g', category: 'Spices' },
-    { name: 'Pepper', unit: 'g', category: 'Spices' },
-    { name: 'Coca Cola', unit: 'ml', category: 'Beverage' },
-    { name: 'Water Bottle', unit: 'unit', category: 'Beverage' },
-    { name: 'Chicken Breast', unit: 'g', category: 'Meat' },
-    { name: 'Rice', unit: 'g', category: 'Dry Goods' },
-    { name: 'Beans', unit: 'g', category: 'Dry Goods' },
-    { name: 'Onion', unit: 'g', category: 'Produce' },
-    { name: 'Garlic', unit: 'g', category: 'Produce' },
-    { name: 'Oil', unit: 'ml', category: 'Dry Goods' },
-    { name: 'Sugar', unit: 'g', category: 'Dry Goods' },
-    { name: 'Milk', unit: 'ml', category: 'Dairy' },
-  ]
-
-  const ingredientMap = new Map()
-
-  for (const i of ingredientsData) {
-    const existing = await prisma.ingredient.findFirst({ where: { name: i.name } })
-    if (existing) {
-      ingredientMap.set(i.name, existing)
-    } else {
-      const created = await prisma.ingredient.create({
-        data: { name: i.name, unit_type: i.unit, category: i.category }
-      })
-      ingredientMap.set(i.name, created)
-    }
-  }
-
-  // 6. Grocery Prices
-  await prisma.groceryPrice.deleteMany({})
-
-  const retailers = {
-    'MX': ['Walmart', 'Chedraui'],
-    'CO': ['Exito', 'Jumbo']
-  }
-
-  const samplePrices = [
-    { i: 'Ground Beef', mx: 180, co: 25000, size: 1000, unit: 'g' },
-    { i: 'Wheat Flour', mx: 25, co: 4500, size: 1000, unit: 'g' },
-    { i: 'Cheddar Cheese', mx: 200, co: 30000, size: 500, unit: 'g' },
-    { i: 'Burger Bun', mx: 50, co: 8000, size: 8, unit: 'unit' },
-    { i: 'Tomato', mx: 30, co: 4000, size: 1000, unit: 'g' },
-    { i: 'Coca Cola', mx: 35, co: 5000, size: 2000, unit: 'ml' },
-  ]
-
-  for (const p of samplePrices) {
-    const ing = ingredientMap.get(p.i)
-    if (!ing) continue
-
-    await prisma.groceryPrice.create({
-      data: {
-        country: 'MX',
-        retailer: retailers['MX'][0],
-        ingredient_id: ing.id,
-        package_size: p.size,
-        package_unit: p.unit,
-        price: p.mx,
-        currency: 'MXN',
-        normalized_price_per_unit: p.mx / p.size,
-        as_of: new Date(),
-      }
-    })
-
-    await prisma.groceryPrice.create({
-      data: {
-        country: 'CO',
-        retailer: retailers['CO'][0],
-        ingredient_id: ing.id,
-        package_size: p.size,
-        package_unit: p.unit,
-        price: p.co,
-        currency: 'COP',
-        normalized_price_per_unit: p.co / p.size,
-        as_of: new Date(),
-      }
-    })
-  }
-
-  // 7. Recipes
-  const recipes = [
-    {
-      name: 'Classic Burger', items: [
-        { i: 'Burger Bun', q: 1, u: 'unit' },
-        { i: 'Ground Beef', q: 150, u: 'g' },
-        { i: 'Cheddar Cheese', q: 20, u: 'g' },
-        { i: 'Tomato', q: 30, u: 'g' },
-      ]
-    },
-    {
-      name: 'Cheeseburger Combo', items: [
-        { i: 'Burger Bun', q: 1, u: 'unit' },
-        { i: 'Ground Beef', q: 150, u: 'g' },
-        { i: 'Cheddar Cheese', q: 40, u: 'g' },
-        { i: 'Coca Cola', q: 500, u: 'ml' },
-      ]
-    },
-  ]
-
-  for (const r of recipes) {
-    const existing = await prisma.recipe.findFirst({ where: { name: r.name } })
-    if (existing) {
-        await prisma.recipeLine.deleteMany({ where: { recipe_id: existing.id }})
-        await prisma.recipe.delete({ where: { id: existing.id }})
-    }
-
-    const recipe = await prisma.recipe.create({
-      data: {
-        name: r.name,
-        menu_item: r.name,
-        version: '1.0',
-        target_cost_pct: 0.30,
-      }
-    })
-
-    for (const item of r.items) {
-      const ing = ingredientMap.get(item.i)
-      if (ing) {
-        await prisma.recipeLine.create({
+  for (const i of ingredients) {
+      const ing = await prisma.ingredient.create({ data: i })
+      await prisma.groceryPrice.create({
           data: {
-            recipe_id: recipe.id,
-            ingredient_id: ing.id,
-            quantity: item.q,
-            unit: item.u
+              country: 'MX', retailer: 'Walmart', ingredient_id: ing.id, package_size: 1000, package_unit: 'g',
+              price: 150, currency: 'MXN', normalized_price_per_unit: 0.15, as_of: new Date()
           }
-        })
+      })
+  }
+
+  // 3. A-to-Z Template
+  // Delete existing to clean up (respecting FKs)
+  await prisma.templateTask.deleteMany({})
+  await prisma.templatePhase.deleteMany({})
+  await prisma.template.deleteMany({})
+
+  const template = await prisma.template.create({
+    data: {
+      name: 'Standard Store Opening – Full A to Z',
+      version: '2.0',
+      is_active: true
+    }
+  })
+
+  const phasesData = [
+    {
+      name: '0. Deal / Planning',
+      order: 0,
+      tasks: [
+        { name: 'Approve Budget', anchor: 'OPEN_DATE', offset: -180, dur: 5, rule: 'CALENDAR_DAYS', role: 'ADMIN' },
+        { name: 'Define Store Concept & Format', anchor: 'OPEN_DATE', offset: -175, dur: 5, rule: 'CALENDAR_DAYS', role: 'PM' },
+        { name: 'Contract Signed', anchor: 'OPEN_DATE', offset: -180, dur: 0, rule: 'CALENDAR_DAYS', role: 'ADMIN', is_milestone: true },
+        { name: 'Site Survey / Feasibility', anchor: 'OPEN_DATE', offset: -175, dur: 7, rule: 'CALENDAR_DAYS', role: 'PM' },
+        { name: 'Lease Negotiation', anchor: 'OPEN_DATE', offset: -170, dur: 21, rule: 'CALENDAR_DAYS', role: 'ADMIN' },
+        { name: 'Sign Lease', anchor: 'OPEN_DATE', offset: -145, dur: 1, rule: 'CALENDAR_DAYS', role: 'ADMIN' },
+        { name: 'Kickoff: Master Launch Plan', anchor: 'OPEN_DATE', offset: -144, dur: 2, rule: 'CALENDAR_DAYS', role: 'PM' },
+      ]
+    },
+    {
+      name: '1. Design & Permits',
+      order: 1,
+      tasks: [
+        { name: 'Select Architect / Designer', anchor: 'OPEN_DATE', offset: -140, dur: 5, rule: 'CALENDAR_DAYS', role: 'PM' },
+        { name: 'Schematic Layout Design', anchor: 'OPEN_DATE', offset: -135, dur: 10, rule: 'CALENDAR_DAYS', role: 'PM' },
+        { name: 'MEP Plan', anchor: 'OPEN_DATE', offset: -125, dur: 10, rule: 'CALENDAR_DAYS', role: 'PM' },
+        { name: 'Finalize Floor Plan', anchor: 'OPEN_DATE', offset: -115, dur: 7, rule: 'CALENDAR_DAYS', role: 'PM' },
+        { name: 'Permit Package Prep', anchor: 'OPEN_DATE', offset: -110, dur: 10, rule: 'CALENDAR_DAYS', role: 'PM' },
+        { name: 'Submit Permits', anchor: 'OPEN_DATE', offset: -100, dur: 1, rule: 'CALENDAR_DAYS', role: 'PM' },
+        { name: 'Permit Review Loop', anchor: 'OPEN_DATE', offset: -99, dur: 30, rule: 'CALENDAR_DAYS', role: 'PM' },
+        { name: 'Permit Approved', anchor: 'OPEN_DATE', offset: -70, dur: 0, rule: 'CALENDAR_DAYS', role: 'PM', is_milestone: true },
+      ]
+    },
+    {
+      name: '2. Menu & Supply',
+      order: 2,
+      tasks: [
+        { name: 'Draft Menu Selection', anchor: 'OPEN_DATE', offset: -120, dur: 7, rule: 'CALENDAR_DAYS', role: 'PM' },
+        { name: 'Recipe Testing', anchor: 'OPEN_DATE', offset: -113, dur: 10, rule: 'CALENDAR_DAYS', role: 'PM' },
+        { name: 'Menu Costing', anchor: 'OPEN_DATE', offset: -103, dur: 7, rule: 'CALENDAR_DAYS', role: 'PM' },
+        { name: 'Finalize Menu', anchor: 'OPEN_DATE', offset: -96, dur: 1, rule: 'CALENDAR_DAYS', role: 'PM' },
+        { name: 'Select Key Suppliers', anchor: 'OPEN_DATE', offset: -95, dur: 7, rule: 'CALENDAR_DAYS', role: 'PM' },
+        { name: 'Set Up Vendor Accounts', anchor: 'OPEN_DATE', offset: -88, dur: 7, rule: 'CALENDAR_DAYS', role: 'PM' },
+      ]
+    },
+    {
+      name: '3. Equipment',
+      order: 3,
+      tasks: [
+        { name: 'Equipment List Draft', anchor: 'OPEN_DATE', offset: -120, dur: 5, rule: 'CALENDAR_DAYS', role: 'PM' },
+        { name: 'Request Quotes', anchor: 'OPEN_DATE', offset: -115, dur: 7, rule: 'CALENDAR_DAYS', role: 'PM' },
+        { name: 'Select Equipment Vendors', anchor: 'OPEN_DATE', offset: -108, dur: 3, rule: 'CALENDAR_DAYS', role: 'PM' },
+        { name: 'Place Equipment Orders', anchor: 'OPEN_DATE', offset: -105, dur: 2, rule: 'CALENDAR_DAYS', role: 'PM' },
+        { name: 'Confirm Delivery Windows', anchor: 'OPEN_DATE', offset: -90, dur: 2, rule: 'CALENDAR_DAYS', role: 'PM' },
+      ]
+    },
+    {
+      name: '4. Construction',
+      order: 4,
+      tasks: [
+        { name: 'Construction Start', anchor: 'OPEN_DATE', offset: -90, dur: 0, rule: 'CALENDAR_DAYS', role: 'PM', is_milestone: true },
+
+        { name: 'GC Selection / Contract', anchor: 'OPEN_DATE', offset: -105, dur: 10, rule: 'CALENDAR_DAYS', role: 'PM' },
+        // These are anchored to CONSTRUCTION_START
+        { name: 'Construction Kickoff', anchor: 'CONSTRUCTION_START', offset: 0, dur: 1, rule: 'CALENDAR_DAYS', role: 'PM' },
+        { name: 'Demolition / Prep', anchor: 'CONSTRUCTION_START', offset: 1, dur: 5, rule: 'CALENDAR_DAYS', role: 'PM' },
+        { name: 'Framing & Rough-in MEP', anchor: 'CONSTRUCTION_START', offset: 6, dur: 20, rule: 'CALENDAR_DAYS', role: 'PM' },
+        { name: 'Rough-in Inspection Scheduling', anchor: 'CONSTRUCTION_START', offset: 20, dur: 2, rule: 'CALENDAR_DAYS', role: 'PM' },
+        { name: 'Rough-in Inspections', anchor: 'CONSTRUCTION_START', offset: 22, dur: 3, rule: 'CALENDAR_DAYS', role: 'PM' },
+        { name: 'Drywall / Finishes', anchor: 'CONSTRUCTION_START', offset: 25, dur: 20, rule: 'CALENDAR_DAYS', role: 'PM' },
+
+        // Back to OPEN_DATE for late stage stuff
+        { name: 'Signage Install Plan', anchor: 'OPEN_DATE', offset: -45, dur: 10, rule: 'CALENDAR_DAYS', role: 'PM' },
+        { name: 'Equipment Install', anchor: 'OPEN_DATE', offset: -28, dur: 7, rule: 'CALENDAR_DAYS', role: 'PM' },
+        { name: 'Final Clean', anchor: 'OPEN_DATE', offset: -5, dur: 2, rule: 'CALENDAR_DAYS', role: 'PM' },
+      ]
+    },
+    {
+      name: '5. IT & Systems',
+      order: 5,
+      tasks: [
+        { name: 'Select POS', anchor: 'OPEN_DATE', offset: -90, dur: 7, rule: 'CALENDAR_DAYS', role: 'IT' },
+        { name: 'Order POS Hardware', anchor: 'OPEN_DATE', offset: -80, dur: 3, rule: 'CALENDAR_DAYS', role: 'IT' },
+        { name: 'Install Network', anchor: 'OPEN_DATE', offset: -21, dur: 2, rule: 'CALENDAR_DAYS', role: 'IT' },
+        { name: 'Configure POS', anchor: 'OPEN_DATE', offset: -14, dur: 7, rule: 'CALENDAR_DAYS', role: 'IT' },
+      ]
+    },
+    {
+      name: '6. Licensing',
+      order: 6,
+      tasks: [
+        { name: 'Business License App', anchor: 'OPEN_DATE', offset: -60, dur: 10, rule: 'CALENDAR_DAYS', role: 'PM' },
+        { name: 'Health Inspection', anchor: 'OPEN_DATE', offset: -14, dur: 1, rule: 'CALENDAR_DAYS', role: 'PM' },
+        { name: 'Business License Issued', anchor: 'OPEN_DATE', offset: -3, dur: 0, rule: 'CALENDAR_DAYS', role: 'PM', is_milestone: true },
+      ]
+    },
+    {
+      name: '7. Hiring & Training',
+      order: 7,
+      tasks: [
+        { name: 'Hire Store Manager', anchor: 'OPEN_DATE', offset: -60, dur: 14, rule: 'CALENDAR_DAYS', role: 'PM' },
+        { name: 'Hire Crew', anchor: 'OPEN_DATE', offset: -30, dur: 14, rule: 'CALENDAR_DAYS', role: 'PM' },
+        // Training Week
+        { name: 'Training Day 1', anchor: 'OPEN_DATE', offset: -10, dur: 1, rule: 'BUSINESS_DAYS_MON_FRI', role: 'PM' },
+        { name: 'Training Day 2', anchor: 'OPEN_DATE', offset: -9, dur: 1, rule: 'BUSINESS_DAYS_MON_FRI', role: 'PM' },
+        { name: 'Training Day 3', anchor: 'OPEN_DATE', offset: -8, dur: 1, rule: 'BUSINESS_DAYS_MON_FRI', role: 'PM' },
+        { name: 'Training Day 4', anchor: 'OPEN_DATE', offset: -7, dur: 1, rule: 'BUSINESS_DAYS_MON_FRI', role: 'PM' },
+        { name: 'Training Day 5', anchor: 'OPEN_DATE', offset: -6, dur: 1, rule: 'BUSINESS_DAYS_MON_FRI', role: 'PM' },
+      ]
+    },
+    {
+      name: '8. Opening',
+      order: 8,
+      tasks: [
+        { name: 'Soft Open', anchor: 'OPEN_DATE', offset: -3, dur: 0, rule: 'CALENDAR_DAYS', role: 'PM', is_milestone: true },
+        { name: 'Soft Opening Day 1', anchor: 'OPEN_DATE', offset: -3, dur: 1, rule: 'CALENDAR_DAYS', role: 'PM' },
+        { name: 'Grand Open', anchor: 'OPEN_DATE', offset: 0, dur: 0, rule: 'CALENDAR_DAYS', role: 'PM', is_milestone: true },
+        { name: 'Grand Opening Execution', anchor: 'OPEN_DATE', offset: 0, dur: 1, rule: 'CALENDAR_DAYS', role: 'PM' },
+      ]
+    }
+  ]
+
+  for (const p of phasesData) {
+    const phase = await prisma.templatePhase.create({
+      data: {
+        template_id: template.id,
+        name: p.name,
+        order: p.order
       }
+    })
+
+    for (const t of p.tasks) {
+      await prisma.templateTask.create({
+        data: {
+          phase_id: phase.id,
+          name: t.name,
+          role_responsible: t.role,
+          duration_days: t.dur,
+          anchor_event: t.anchor,
+          offset_days: t.offset,
+          workday_rule: t.rule,
+          is_milestone: t.is_milestone || false
+        }
+      })
     }
   }
 
-  // 8. Competitor Prices
-  await prisma.competitorPrice.deleteMany({})
-  const compPrices = [
-      { country: 'MX', brand: 'Burger King', menu_item: 'Whopper', price: 99.00, currency: 'MXN', as_of: new Date() },
-      { country: 'MX', brand: 'McDonalds', menu_item: 'Big Mac', price: 109.00, currency: 'MXN', as_of: new Date() },
-      { country: 'MX', brand: 'Carls Jr', menu_item: 'Famous Star', price: 115.00, currency: 'MXN', as_of: new Date() },
+  // 4. Create a Sample Store to Test Scheduling Logic
+  // Clean up old stores
+  await prisma.task.deleteMany({}) // tasks depend on store
+  await prisma.milestone.deleteMany({}) // milestones depend on store
+  await prisma.store.deleteMany({})
 
-      { country: 'CO', brand: 'El Corral', menu_item: 'Corralisima', price: 25000.00, currency: 'COP', as_of: new Date() },
-      { country: 'CO', brand: 'McDonalds', menu_item: 'Big Mac', price: 21000.00, currency: 'COP', as_of: new Date() },
-      { country: 'CO', brand: 'Presto', menu_item: 'Super Presto', price: 19000.00, currency: 'COP', as_of: new Date() },
+  const store = await prisma.store.create({
+    data: {
+      name: 'Mexico City Flagship',
+      country: 'MX',
+      city: 'Mexico City',
+      timezone: 'America/Mexico_City',
+      planned_open_date: new Date('2025-06-01'),
+      status: 'PLANNING',
+      template_version: template.version
+    }
+  })
+
+  // Create Milestones
+  const openDate = new Date('2025-06-01')
+  const constructionDate = new Date(openDate)
+  constructionDate.setDate(openDate.getDate() - 90)
+
+  const milestonesData = [
+      { store_id: store.id, name: 'Planned Open Date', type: 'OPEN_DATE', date: openDate, status: 'PENDING' },
+      { store_id: store.id, name: 'Construction Start', type: 'CONSTRUCTION_START', date: constructionDate, status: 'PENDING' },
   ]
-  for (const p of compPrices) {
-      await prisma.competitorPrice.create({ data: p })
+  for (const m of milestonesData) {
+      await prisma.milestone.create({ data: m })
   }
 
-  console.log('Seeding finished.')
+  console.log('Seed complete. Store created: ' + store.name)
 }
 
 main()

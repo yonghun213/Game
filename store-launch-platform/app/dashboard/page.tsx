@@ -1,5 +1,6 @@
 
 import { PrismaClient } from '@/src/generated/client'
+import Link from 'next/link'
 
 const prisma = new PrismaClient()
 
@@ -57,10 +58,12 @@ export default async function DashboardOverview() {
           <tbody className="bg-white divide-y divide-gray-200">
             {stores.map(s => (
               <tr key={s.id} className="hover:bg-gray-50">
-                <td className="px-6 py-4 whitespace-nowrap font-medium text-gray-900">{s.name}</td>
+                <td className="px-6 py-4 whitespace-nowrap font-medium text-blue-600 hover:text-blue-800">
+                  <Link href={`/dashboard/stores/${s.id}`}>{s.name}</Link>
+                </td>
                 <td className="px-6 py-4 whitespace-nowrap text-gray-500">{s.country}</td>
                 <td className="px-6 py-4 whitespace-nowrap text-gray-500">
-                  {new Date(s.planned_open_date).toLocaleDateString()}
+                  {s.planned_open_date ? new Date(s.planned_open_date).toLocaleDateString() : 'N/A'}
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap">
                   <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full

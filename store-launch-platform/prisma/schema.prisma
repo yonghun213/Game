@@ -35,8 +35,12 @@ model Store {
   address           String?
   timezone          String    // e.g. "America/Mexico_City"
   status            String    // "PLANNING", "ACTIVE", "OPEN", "CANCELLED"
-  planned_open_date DateTime
+
+  // Anchors - these can be derived or manual.
+  // Milestone table is canonical, but keeping these for easy access is helpful.
+  planned_open_date DateTime?
   actual_open_date  DateTime?
+  contract_signed_date DateTime?
 
   template_version  String
 
@@ -77,6 +81,12 @@ model TemplateTask {
   role_responsible String // "PM", "IT", "CONSTRUCTION"
   duration_days   Int
 
+  // Scheduling Logic
+  anchor_event    String   // "OPEN_DATE", "CONTRACT_SIGNED", "CONSTRUCTION_START", etc.
+  offset_days     Int      // Negative = before, Positive = after
+  workday_rule    String   @default("CALENDAR_DAYS") // "CALENDAR_DAYS", "BUSINESS_DAYS_MON_FRI"
+  is_milestone    Boolean  @default(false)
+
   dependency_indices String?
 
   phase           TemplatePhase @relation(fields: [phase_id], references: [id])
@@ -94,6 +104,12 @@ model Task {
   start_date  DateTime?
   due_date    DateTime?
   completed_at DateTime?
+
+  // Scheduling & Rescheduling
+  manual_override Boolean @default(false)
+  locked          Boolean @default(false)
+  reschedule_mode String  @default("SHIFT_DOWNSTREAM") // "ONLY_THIS", "SHIFT_DOWNSTREAM", "CUSTOM_SET"
+  calendar_rule   String  @default("CALENDAR_DAYS")
 
   owner_id    String?
   owner       User?    @relation("TaskOwner", fields: [owner_id], references: [id])
@@ -123,7 +139,8 @@ model TaskDependency {
 model Milestone {
   id          String   @id @default(uuid())
   store_id    String
-  name        String
+  name        String   // e.g. "Grand Opening"
+  type        String   // "OPEN_DATE", "CONTRACT_SIGNED", "CONSTRUCTION_START", "SOFT_OPEN", etc.
   date        DateTime
   status      String   // "PENDING", "ACHIEVED"
 
