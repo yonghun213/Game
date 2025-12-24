@@ -105,11 +105,14 @@ model Task {
   due_date    DateTime?
   completed_at DateTime?
 
+  role        String?  // "PM", "IT", "CONSTRUCTION", etc.
+
   // Scheduling & Rescheduling
   manual_override Boolean @default(false)
   locked          Boolean @default(false)
   reschedule_mode String  @default("SHIFT_DOWNSTREAM") // "ONLY_THIS", "SHIFT_DOWNSTREAM", "CUSTOM_SET"
   calendar_rule   String  @default("CALENDAR_DAYS")
+  anchor          String? // e.g. "OPEN_DATE", "CONTRACT_SIGNED" - stored for re-baselining
 
   owner_id    String?
   owner       User?    @relation("TaskOwner", fields: [owner_id], references: [id])

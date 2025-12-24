@@ -1,118 +1,158 @@
 
 import { PrismaClient } from '../generated/client'
-import { addDays, subDays, isWeekend, addBusinessDays, isSaturday, isSunday } from 'date-fns'
+import { addDays, subDays, isWeekend, addBusinessDays, differenceInCalendarDays } from 'date-fns'
 
 const prisma = new PrismaClient()
 
-// --- Date Math Helpers ---
+// --- Date Math ---
 
 export function calculateDate(baseDate: Date, offset: number, rule: string): Date {
   let result = new Date(baseDate)
-
   if (rule === 'BUSINESS_DAYS_MON_FRI') {
-    // Simple business day logic (no holidays for MVP)
-    if (offset === 0) return result
-
-    // If offset is positive, add business days
-    // If negative, subtract? date-fns addBusinessDays handles negative.
-    // However, we need to ensure start date isn't weekend if rule is Mon-Fri.
-
-    // First, ensure base is a weekday if we are adding 0?
-    // Actually, usually we add offset.
-
     result = addBusinessDays(result, offset)
   } else {
-    // CALENDAR_DAYS
     result = addDays(result, offset)
   }
-
   return result
 }
 
 // --- Generator ---
 
-export async function generateStoreTimeline(storeId: String, templateId: String) {
+export async function generateStoreTimeline(storeId: string, templateId: string) {
   // 1. Fetch Store Anchors
-  const milestones = await prisma.milestone.findMany({
-    where: { store_id: storeId as string }
-  })
-
+  const milestones = await prisma.milestone.findMany({ where: { store_id: storeId } })
   const anchorMap = new Map<string, Date>()
   milestones.forEach(m => anchorMap.set(m.type, m.date))
 
-  // Default fallbacks if anchors missing (MVP safe-guards)
   if (!anchorMap.has('OPEN_DATE')) {
-    // Try to find derived? For now assume OPEN_DATE exists as primary.
-    console.error(`Store ${storeId} missing OPEN_DATE anchor`)
-    return
+    if (anchorMap.has('CONTRACT_SIGNED')) {
+        const open = addDays(anchorMap.get('CONTRACT_SIGNED')!, 180)
+        anchorMap.set('OPEN_DATE', open)
+        await prisma.milestone.create({
+            data: { store_id: storeId, name: 'Planned Open Date (Derived)', type: 'OPEN_DATE', date: open, status: 'PENDING' }
+        })
+    } else {
+        console.error(`Store ${storeId} missing OPEN_DATE and CONTRACT_SIGNED`)
+        return
+    }
   }
 
-  // 2. Fetch Template
   const templatePhases = await prisma.templatePhase.findMany({
-    where: { template_id: templateId as string },
+    where: { template_id: templateId },
     include: { tasks: true },
     orderBy: { order: 'asc' }
   })
 
-  const newTasks = []
+  // Keep track of created tasks to link dependencies
+  // Map<TemplateTaskName, CreatedTaskId>
+  // Warning: Template task names must be unique for this simple mapping logic
+  const taskNameIdMap = new Map<string, string>()
 
   for (const phase of templatePhases) {
     for (const tTask of phase.tasks) {
-      // 3. Determine Anchor Date
       let anchorDate = anchorMap.get(tTask.anchor_event)
 
-      // If specific anchor missing (e.g. CONSTRUCTION_START not set yet),
-      // fallback to OPEN_DATE derived logic or skip?
-      // Requirement: "Derive CONSTRUCTION_START milestone automatically if not provided (e.g. default OPEN_DATE - 90 days)"
-      // Ideally we should have created the milestones *before* calling this.
-      // But let's handle graceful fallback:
       if (!anchorDate) {
         if (tTask.anchor_event === 'CONSTRUCTION_START') {
              const open = anchorMap.get('OPEN_DATE')!
              anchorDate = subDays(open, 90)
         } else {
-             anchorDate = anchorMap.get('OPEN_DATE')! // Fallback to Open Date
+             anchorDate = anchorMap.get('OPEN_DATE')!
         }
       }
 
-      // 4. Calc Dates
       const startDate = calculateDate(anchorDate, tTask.offset_days, tTask.workday_rule)
       const dueDate = calculateDate(startDate, tTask.duration_days, tTask.workday_rule)
 
-      newTasks.push({
-        store_id: storeId,
-        title: tTask.name,
-        phase: phase.name,
-        status: 'NOT_STARTED',
-        start_date: startDate,
-        due_date: dueDate,
-        calendar_rule: tTask.workday_rule,
-        // We could link dependencies here if we had indices mapping
+      const newTask = await prisma.task.create({
+        data: {
+            store_id: storeId,
+            title: tTask.name,
+            phase: phase.name,
+            status: 'NOT_STARTED',
+            start_date: startDate,
+            due_date: dueDate,
+            calendar_rule: tTask.workday_rule,
+            anchor: tTask.anchor_event,
+            role: tTask.role_responsible,
+        }
       })
+
+      taskNameIdMap.set(tTask.name, newTask.id)
     }
   }
 
-  // Batch insert
-  // SQLite/Prisma createMany is nice if supported
-  for (const t of newTasks) {
-    await prisma.task.create({ data: t as any })
+  // Second pass: Create Dependencies
+  for (const phase of templatePhases) {
+      for (const tTask of phase.tasks) {
+          if (tTask.dependency_indices) {
+              console.log(`Found task with deps: ${tTask.name} -> ${tTask.dependency_indices}`)
+              try {
+                  // console.log(`Processing deps for ${tTask.name}: ${tTask.dependency_indices}`)
+                  const deps = JSON.parse(tTask.dependency_indices) as string[]
+                  const taskId = taskNameIdMap.get(tTask.name)
+                  if (!taskId) {
+                      console.log(`Task ID not found for ${tTask.name}`)
+                      continue
+                  }
+
+                  for (const depName of deps) {
+                      const depId = taskNameIdMap.get(depName)
+                      if (depId) {
+                          await prisma.taskDependency.create({
+                              data: { task_id: taskId, depends_on_id: depId }
+                          })
+                          // console.log(`Created dep: ${tTask.name} -> ${depName}`)
+                      } else {
+                          console.log(`Dep ID not found for ${depName}`)
+                      }
+                  }
+              } catch (e) {
+                  console.error(`Error parsing deps for ${tTask.name}:`, e)
+              }
+          }
+      }
   }
+}
+
+// --- Helpers ---
+
+async function getDescendants(taskId: string, visited = new Set<string>()): Promise<string[]> {
+    if (visited.has(taskId)) return []
+    visited.add(taskId)
+
+    const deps = await prisma.taskDependency.findMany({
+        where: { depends_on_id: taskId }
+    })
+
+    let descendants: string[] = []
+    for (const dep of deps) {
+        descendants.push(dep.task_id)
+        const sub = await getDescendants(dep.task_id, visited)
+        descendants = [...descendants, ...sub]
+    }
+    return descendants
 }
 
 // --- Rescheduling ---
 
-export async function rescheduleTask(taskId: string, newStartDate: Date, policy: 'ONLY_THIS' | 'SHIFT_DOWNSTREAM') {
+export async function rescheduleTask(
+    taskId: string,
+    newStartDate: Date,
+    policy: 'ONLY_THIS' | 'SHIFT_DOWNSTREAM' | 'CUSTOM_SET',
+    customTaskIds: string[] = []
+) {
   const task = await prisma.task.findUnique({ where: { id: taskId } })
   if (!task || !task.start_date || !task.due_date) return
 
   const oldStart = new Date(task.start_date)
-  const deltaMs = newStartDate.getTime() - oldStart.getTime()
-  const deltaDays = Math.round(deltaMs / (1000 * 60 * 60 * 24))
+  const deltaDays = differenceInCalendarDays(newStartDate, oldStart)
 
   if (deltaDays === 0) return
 
   // Update current task
-  const newDue = addDays(new Date(task.due_date), deltaDays)
+  const duration = differenceInCalendarDays(new Date(task.due_date), oldStart)
+  const newDue = addDays(newStartDate, duration)
 
   await prisma.task.update({
     where: { id: taskId },
@@ -123,31 +163,68 @@ export async function rescheduleTask(taskId: string, newStartDate: Date, policy:
     }
   })
 
+  let tasksToShift: string[] = []
+
   if (policy === 'SHIFT_DOWNSTREAM') {
-     // Find downstream. For MVP, we'll use a simplified "All tasks in the future" approach
-     // or "All tasks with start_date >= old_start_date" (excluding the one we just moved)
-     // A true dependency graph is better, but we haven't seeded dependencies fully.
-     // Let's use: All tasks in the same store that started AFTER or ON the old start date.
-
-     const downstream = await prisma.task.findMany({
-       where: {
-         store_id: task.store_id,
-         id: { not: taskId }, // exclude self
-         start_date: { gte: oldStart },
-         locked: false
-       }
-     })
-
-     for (const t of downstream) {
-       if (!t.start_date || !t.due_date) continue
-
-       await prisma.task.update({
-         where: { id: t.id },
-         data: {
-           start_date: addDays(new Date(t.start_date), deltaDays),
-           due_date: addDays(new Date(t.due_date), deltaDays)
-         }
-       })
-     }
+     const descendants = await getDescendants(taskId)
+     tasksToShift = descendants
+  } else if (policy === 'CUSTOM_SET') {
+     tasksToShift = customTaskIds
   }
+
+  for (const tid of tasksToShift) {
+      if (tid === taskId) continue
+
+      const t = await prisma.task.findUnique({ where: { id: tid } })
+      if (!t || t.locked || !t.start_date || !t.due_date) continue
+
+      const tStart = addDays(new Date(t.start_date), deltaDays)
+      const tDue = addDays(new Date(t.due_date), deltaDays)
+
+      await prisma.task.update({
+          where: { id: tid },
+          data: { start_date: tStart, due_date: tDue }
+      })
+  }
+}
+
+// --- Milestone Updates ---
+
+export async function updateMilestone(milestoneId: string, newDate: Date) {
+    const ms = await prisma.milestone.findUnique({ where: { id: milestoneId } })
+    if (!ms) return
+
+    await prisma.milestone.update({ where: { id: milestoneId }, data: { date: newDate } })
+
+    const deltaDays = differenceInCalendarDays(newDate, new Date(ms.date))
+    if (deltaDays === 0) return
+
+    const anchoredTasks = await prisma.task.findMany({
+        where: { store_id: ms.store_id, anchor: ms.type, locked: false }
+    })
+
+    for (const t of anchoredTasks) {
+        if (!t.start_date || !t.due_date) continue
+        const tStart = addDays(new Date(t.start_date), deltaDays)
+        const tDue = addDays(new Date(t.due_date), deltaDays)
+
+        await prisma.task.update({
+            where: { id: t.id },
+            data: { start_date: tStart, due_date: tDue }
+        })
+
+        const descendants = await getDescendants(t.id)
+        for (const descId of descendants) {
+             const dt = await prisma.task.findUnique({ where: { id: descId } })
+             if (dt && !dt.locked && !dt.anchor && dt.start_date && dt.due_date) {
+                 await prisma.task.update({
+                     where: { id: descId },
+                     data: {
+                         start_date: addDays(new Date(dt.start_date), deltaDays),
+                         due_date: addDays(new Date(dt.due_date), deltaDays)
+                     }
+                 })
+             }
+        }
+    }
 }

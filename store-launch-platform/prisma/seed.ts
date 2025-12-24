@@ -1,6 +1,7 @@
 
 import { PrismaClient } from '../src/generated/client'
 import bcrypt from 'bcryptjs'
+import { generateStoreTimeline } from '../src/lib/scheduling'
 
 const prisma = new PrismaClient()
 
@@ -68,7 +69,7 @@ async function main() {
       tasks: [
         { name: 'Approve Budget', anchor: 'OPEN_DATE', offset: -180, dur: 5, rule: 'CALENDAR_DAYS', role: 'ADMIN' },
         { name: 'Define Store Concept & Format', anchor: 'OPEN_DATE', offset: -175, dur: 5, rule: 'CALENDAR_DAYS', role: 'PM' },
-        { name: 'Contract Signed', anchor: 'OPEN_DATE', offset: -180, dur: 0, rule: 'CALENDAR_DAYS', role: 'ADMIN', is_milestone: true },
+        { name: 'Contract Signed', anchor: 'CONTRACT_SIGNED', offset: 0, dur: 0, rule: 'CALENDAR_DAYS', role: 'ADMIN', is_milestone: true },
         { name: 'Site Survey / Feasibility', anchor: 'OPEN_DATE', offset: -175, dur: 7, rule: 'CALENDAR_DAYS', role: 'PM' },
         { name: 'Lease Negotiation', anchor: 'OPEN_DATE', offset: -170, dur: 21, rule: 'CALENDAR_DAYS', role: 'ADMIN' },
         { name: 'Sign Lease', anchor: 'OPEN_DATE', offset: -145, dur: 1, rule: 'CALENDAR_DAYS', role: 'ADMIN' },
@@ -93,12 +94,14 @@ async function main() {
       name: '2. Menu & Supply',
       order: 2,
       tasks: [
-        { name: 'Draft Menu Selection', anchor: 'OPEN_DATE', offset: -120, dur: 7, rule: 'CALENDAR_DAYS', role: 'PM' },
-        { name: 'Recipe Testing', anchor: 'OPEN_DATE', offset: -113, dur: 10, rule: 'CALENDAR_DAYS', role: 'PM' },
-        { name: 'Menu Costing', anchor: 'OPEN_DATE', offset: -103, dur: 7, rule: 'CALENDAR_DAYS', role: 'PM' },
-        { name: 'Finalize Menu', anchor: 'OPEN_DATE', offset: -96, dur: 1, rule: 'CALENDAR_DAYS', role: 'PM' },
-        { name: 'Select Key Suppliers', anchor: 'OPEN_DATE', offset: -95, dur: 7, rule: 'CALENDAR_DAYS', role: 'PM' },
-        { name: 'Set Up Vendor Accounts', anchor: 'OPEN_DATE', offset: -88, dur: 7, rule: 'CALENDAR_DAYS', role: 'PM' },
+        // Anchored to Contract Signed (assumed D-180 relative to Open)
+        // D-120 is Contract + 60
+        { name: 'Draft Menu Selection', anchor: 'CONTRACT_SIGNED', offset: 60, dur: 7, rule: 'CALENDAR_DAYS', role: 'PM' },
+        { name: 'Recipe Testing', anchor: 'CONTRACT_SIGNED', offset: 67, dur: 10, rule: 'CALENDAR_DAYS', role: 'PM' },
+        { name: 'Menu Costing', anchor: 'CONTRACT_SIGNED', offset: 77, dur: 7, rule: 'CALENDAR_DAYS', role: 'PM' },
+        { name: 'Finalize Menu', anchor: 'CONTRACT_SIGNED', offset: 84, dur: 1, rule: 'CALENDAR_DAYS', role: 'PM' },
+        { name: 'Select Key Suppliers', anchor: 'CONTRACT_SIGNED', offset: 85, dur: 7, rule: 'CALENDAR_DAYS', role: 'PM' },
+        { name: 'Set Up Vendor Accounts', anchor: 'CONTRACT_SIGNED', offset: 92, dur: 7, rule: 'CALENDAR_DAYS', role: 'PM' },
       ]
     },
     {
@@ -121,7 +124,7 @@ async function main() {
         { name: 'GC Selection / Contract', anchor: 'OPEN_DATE', offset: -105, dur: 10, rule: 'CALENDAR_DAYS', role: 'PM' },
         // These are anchored to CONSTRUCTION_START
         { name: 'Construction Kickoff', anchor: 'CONSTRUCTION_START', offset: 0, dur: 1, rule: 'CALENDAR_DAYS', role: 'PM' },
-        { name: 'Demolition / Prep', anchor: 'CONSTRUCTION_START', offset: 1, dur: 5, rule: 'CALENDAR_DAYS', role: 'PM' },
+        { name: 'Demolition / Prep', anchor: 'CONSTRUCTION_START', offset: 1, dur: 5, rule: 'CALENDAR_DAYS', role: 'PM', depends_on: ['Construction Kickoff'] },
         { name: 'Framing & Rough-in MEP', anchor: 'CONSTRUCTION_START', offset: 6, dur: 20, rule: 'CALENDAR_DAYS', role: 'PM' },
         { name: 'Rough-in Inspection Scheduling', anchor: 'CONSTRUCTION_START', offset: 20, dur: 2, rule: 'CALENDAR_DAYS', role: 'PM' },
         { name: 'Rough-in Inspections', anchor: 'CONSTRUCTION_START', offset: 22, dur: 3, rule: 'CALENDAR_DAYS', role: 'PM' },
@@ -197,7 +200,8 @@ async function main() {
           anchor_event: t.anchor,
           offset_days: t.offset,
           workday_rule: t.rule,
-          is_milestone: t.is_milestone || false
+          is_milestone: t.is_milestone || false,
+          dependency_indices: t.depends_on ? JSON.stringify(t.depends_on) : null
         }
       })
     }
@@ -225,14 +229,20 @@ async function main() {
   const openDate = new Date('2025-06-01')
   const constructionDate = new Date(openDate)
   constructionDate.setDate(openDate.getDate() - 90)
+  const contractDate = new Date(openDate)
+  contractDate.setDate(openDate.getDate() - 180)
 
   const milestonesData = [
       { store_id: store.id, name: 'Planned Open Date', type: 'OPEN_DATE', date: openDate, status: 'PENDING' },
       { store_id: store.id, name: 'Construction Start', type: 'CONSTRUCTION_START', date: constructionDate, status: 'PENDING' },
+      { store_id: store.id, name: 'Contract Signed', type: 'CONTRACT_SIGNED', date: contractDate, status: 'ACHIEVED' },
   ]
   for (const m of milestonesData) {
       await prisma.milestone.create({ data: m })
   }
+
+  // Generate Tasks
+  await generateStoreTimeline(store.id, template.id)
 
   console.log('Seed complete. Store created: ' + store.name)
 }
